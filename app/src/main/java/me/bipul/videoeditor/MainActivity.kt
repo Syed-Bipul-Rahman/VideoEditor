@@ -133,10 +133,11 @@ class MainActivity : AppCompatActivity() {
             .setMessage("Trimming video, please wait...")
             .setCancelable(false)
             .create()
-        progressDialog.show()
+//        progressDialog.show()
 
         // Get input path
         val inputPath = getRealPathFromURI(videoUri)
+        Log.d("myTakaTAG",videoUri.toString())
         if (inputPath == null) {
             progressDialog.dismiss()
             Toast.makeText(this, "Cannot process this video", Toast.LENGTH_SHORT).show()
@@ -192,6 +193,77 @@ class MainActivity : AppCompatActivity() {
 
     private fun getRealPathFromURI(uri: Uri): String? {
         return try {
+            // Attempt to copy the video to a temporary file
+            val tempPath = copyUriToFile(uri)
+            if (tempPath != null) {
+                Log.i(TAG, "Successfully copied video to: $tempPath")
+                return tempPath
+            }
+
+            // Fallback: Try MediaStore query (less reliable on Android 10+)
+            val filePathColumn = arrayOf(MediaStore.Video.Media.DATA)
+            contentResolver.query(uri, filePathColumn, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
+                    val path = cursor.getString(columnIndex)
+                    if (File(path).exists()) {
+                        Log.i(TAG, "Resolved path from MediaStore: $path")
+                        return path
+                    } else {
+                        Log.w(TAG, "MediaStore path does not exist: $path")
+                    }
+                } else {
+                    Log.w(TAG, "MediaStore query returned empty cursor for URI: $uri")
+                }
+            }
+
+            Log.e(TAG, "Failed to resolve path for URI: $uri")
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resolving path for URI: $uri", e)
+            null
+        }
+    }
+
+    private fun copyUriToFile(uri: Uri): String? {
+        return try {
+            // Open input stream from the Uri
+            contentResolver.openInputStream(uri)?.use { inputStream ->
+                // Create a temporary file in cache directory
+                val tempFile = File(cacheDir, "temp_video_${System.currentTimeMillis()}.mp4")
+
+                // Copy the stream to the temporary file
+                tempFile.outputStream().use { outputStream ->
+                    val buffer = ByteArray(4 * 1024) // 4KB buffer
+                    var bytesRead: Int
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        outputStream.write(buffer, 0, bytesRead)
+                    }
+                    outputStream.flush()
+                }
+
+                // Verify the file was created and is not empty
+                if (tempFile.exists() && tempFile.length() > 0) {
+                    return tempFile.absolutePath
+                } else {
+                    Log.e(TAG, "Temporary file is empty or not created: ${tempFile.absolutePath}")
+                    tempFile.delete() // Clean up
+                    return null
+                }
+            } ?: run {
+                Log.e(TAG, "Failed to open input stream for URI: $uri")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to copy URI to file: $uri", e)
+            null
+        }
+    }
+
+
+
+ /*   private fun getRealPathFromURI(uri: Uri): String? {
+        return try {
             val filePathColumn = arrayOf(MediaStore.Video.Media.DATA)
             val cursor = contentResolver.query(uri, filePathColumn, null, null, null)
 
@@ -227,7 +299,7 @@ class MainActivity : AppCompatActivity() {
             null
         }
     }
-
+           */
     private fun createOutputFile(): File? {
         return try {
             val videoDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
