@@ -1,0 +1,37 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <Button
+        android:layout_marginTop="16dp"
+        android:id="@+id/btnImport"
+        android:text="Import Video"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"/>
+
+    <VideoView
+        android:id="@+id/videoView"
+        android:layout_width="match_parent"
+        android:layout_height="250dp"
+        android:layout_marginTop="16dp"/>
+
+    <SeekBar
+        android:id="@+id/seekBarStart"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="100"/>
+
+    <SeekBar
+        android:id="@+id/seekBarEnd"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="100"/>
+
+    <Button
+        android:id="@+id/btnExport"
+        android:text="Export Trimmed Video"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"/>
+</LinearLayout>
