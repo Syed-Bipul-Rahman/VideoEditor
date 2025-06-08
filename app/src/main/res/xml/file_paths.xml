@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Create this file at res/xml/file_paths.xml -->
+<paths xmlns:android="http://schemas.android.com/tools"
+    android:ignore="NamespaceTypo">
+    <!-- External storage -->
+    <external-path name="external_files" path="." />
+
+    <!-- App-specific external storage -->
+    <external-files-path name="external_app_files" path="." />
+
+    <!-- Cache directory -->
+    <cache-path name="cache" path="." />
+
+    <!-- Internal storage -->
+    <files-path name="files" path="." />
+</paths>
