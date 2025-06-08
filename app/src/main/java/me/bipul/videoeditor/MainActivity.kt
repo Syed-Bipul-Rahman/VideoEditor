@@ -19,39 +19,37 @@ import java.io.File
 
 class MainActivity : AppCompatActivity() {
     private lateinit var mBinding: ActivityMainBinding
-    private val REQUEST_CODE_PICK_VIDEO = 1
     private var selectedVideoUri: Uri? = null
     private var videoDuration = 0L
 
-    //val outputDir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+    // Define the ActivityResultLauncher as a class property
+    private val videoPickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK) {
+            result.data?.data?.also { uri ->
+                selectedVideoUri = uri
+                setupVideoPreview(uri)
+                Log.i(TAG, selectedVideoUri.toString())
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         mBinding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(mBinding.root)
 
-
-//pick video
+        // Pick video
         mBinding.btnImport.setOnClickListener {
             pickVideo()
         }
-//export video
+
+        // Export video
         mBinding.btnExport.setOnClickListener {
             selectedVideoUri?.let { uri ->
                 trimSelectedVideo(uri)
             } ?: Toast.makeText(this, "Please import a video first", Toast.LENGTH_SHORT).show()
         }
-
-        // Register Activity Result Launcher
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == Activity.RESULT_OK) {
-                result.data?.data?.also { uri ->
-                    selectedVideoUri = uri
-                    setupVideoPreview(uri)
-                }
-            }
-        }
-
     }
 
     private fun pickVideo() {
@@ -59,7 +57,8 @@ class MainActivity : AppCompatActivity() {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "video/*"
         }
-        startActivity(intent)
+        // Launch the intent using the ActivityResultLauncher
+        videoPickerLauncher.launch(intent)
     }
 
     private fun setupVideoPreview(uri: Uri) {
@@ -73,6 +72,7 @@ class MainActivity : AppCompatActivity() {
             mBinding.videoView.start()
         }
     }
+
     private fun trimSelectedVideo(videoUri: Uri) {
         val contentResolver = contentResolver
         val inputStream = contentResolver.openInputStream(videoUri)
@@ -108,5 +108,4 @@ class MainActivity : AppCompatActivity() {
 //            }
 //        }
     }
-
 }
