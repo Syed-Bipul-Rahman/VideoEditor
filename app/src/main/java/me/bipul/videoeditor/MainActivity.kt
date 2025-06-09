@@ -1,7 +1,6 @@
 package me.bipul.videoeditor
 
 import android.Manifest
-import android.app.Activity
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -16,65 +15,61 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import me.bipul.videoeditor.databinding.ActivityMainBinding
-import kotlinx.coroutines.*
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
     private lateinit var mBinding: ActivityMainBinding
     private var selectedVideoUri: Uri? = null
     private var videoDuration = 0L
+    private var tempInputFile: File? = null
 
     companion object {
         const val TAG = "VideoEditor"
         const val STORAGE_PERMISSION_CODE = 1001
     }
 
-    // Define the ActivityResultLauncher as a class property
-    private val videoPickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == RESULT_OK) {
-            result.data?.data?.also { uri ->
-                selectedVideoUri = uri
-                setupVideoPreview(uri)
-                Log.i(TAG, selectedVideoUri.toString())
+    private val videoPickerLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                result.data?.data?.also { uri ->
+                    selectedVideoUri = uri
+                    setupVideoPreview(uri)
+                    Log.i(TAG, selectedVideoUri.toString())
+                }
             }
         }
-    }
 
-    // Permission launcher
-    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
-            selectedVideoUri?.let { uri ->
-                trimSelectedVideo(uri)
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            val allGranted = permissions.values.all { it }
+            if (allGranted) {
+                selectedVideoUri?.let { uri ->
+                    trimSelectedVideo(uri)
+                }
+            } else {
+                Toast.makeText(
+                    this,
+                    "Storage permission is required to save videos",
+                    Toast.LENGTH_LONG
+                ).show()
             }
-        } else {
-            Toast.makeText(this, "Storage permission is required to save videos", Toast.LENGTH_LONG).show()
         }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         mBinding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(mBinding.root)
-//
-//        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
-//            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-//            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-//            insets
-//        }
 
-        // Pick video
         mBinding.btnImport.setOnClickListener {
             pickVideo()
         }
 
-        // Export video
         mBinding.btnExport.setOnClickListener {
             selectedVideoUri?.let { uri ->
                 if (checkAndRequestPermissions()) {
@@ -84,12 +79,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        // Clean up temporary files
+        tempInputFile?.delete()
+    }
+
     private fun pickVideo() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "video/*"
         }
-        // Launch the intent using the ActivityResultLauncher
         videoPickerLauncher.launch(intent)
     }
 
@@ -100,25 +100,26 @@ class MainActivity : AppCompatActivity() {
             mBinding.seekBarStart.max = videoDuration.toInt()
             mBinding.seekBarEnd.max = videoDuration.toInt()
             mBinding.seekBarEnd.progress = videoDuration.toInt()
-
             mBinding.videoView.start()
         }
     }
 
     private fun checkAndRequestPermissions(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+ - no need for storage permissions for app-specific directories
             true
         } else {
-            // Android 12 and below
-            val writePermission = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            val readPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+            val writePermission =
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            val readPermission =
+                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
 
             if (writePermission != PackageManager.PERMISSION_GRANTED || readPermission != PackageManager.PERMISSION_GRANTED) {
-                permissionLauncher.launch(arrayOf(
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                    Manifest.permission.READ_EXTERNAL_STORAGE
-                ))
+                permissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                        Manifest.permission.READ_EXTERNAL_STORAGE
+                    )
+                )
                 false
             } else {
                 true
@@ -127,65 +128,66 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun trimSelectedVideo(videoUri: Uri) {
-        // Show progress dialog
         val progressDialog = AlertDialog.Builder(this)
             .setTitle("Processing Video")
             .setMessage("Trimming video, please wait...")
             .setCancelable(false)
             .create()
-//        progressDialog.show()
+        progressDialog.show()
 
-        // Get input path
-        val inputPath = getRealPathFromURI(videoUri)
-        Log.d("myTakaTAG",videoUri.toString())
-        if (inputPath == null) {
-            progressDialog.dismiss()
-            Toast.makeText(this, "Cannot process this video", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val startMs = mBinding.seekBarStart.progress.toLong()
-        val endMs = mBinding.seekBarEnd.progress.toLong()
-        val startTime = startMs.toDouble() / 1000
-        val duration = (endMs - startMs).toDouble() / 1000
-
-        // Validate trim parameters
-        if (duration <= 0) {
-            progressDialog.dismiss()
-            Toast.makeText(this, "Invalid trim duration", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // Create output file
-        val outputFile = createOutputFile()
-        if (outputFile == null) {
-            progressDialog.dismiss()
-            Toast.makeText(this, "Cannot create output file", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // Perform trimming in background thread
+        // Use coroutine scope with IO dispatcher for file operations
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                FFmpegHelper.trimVideo(inputPath, outputFile.absolutePath, startTime, duration)
+                val inputPath = getRealPathFromURI(videoUri) ?: throw Exception("Cannot process video")
+                val startUs = mBinding.seekBarStart.progress.toLong() * 1000
+                val endUs = mBinding.seekBarEnd.progress.toLong() * 1000
 
-                // Add to MediaStore so it appears in gallery
-                val videoUri = addVideoToGallery(outputFile)
-
-                runOnUiThread {
-                    progressDialog.dismiss()
-                    if (videoUri != null) {
-                        Toast.makeText(this@MainActivity, "Video trimmed successfully and saved to gallery!", Toast.LENGTH_LONG).show()
-                        Log.i(TAG, "Trimmed video saved: ${outputFile.absolutePath}")
-                    } else {
-                        Toast.makeText(this@MainActivity, "Video trimmed but failed to add to gallery", Toast.LENGTH_LONG).show()
-                    }
+                // Validate duration
+                if (endUs <= startUs) {
+                    throw IllegalArgumentException("Invalid trim duration")
                 }
+
+                val outputFile = createOutputFile() ?: throw Exception("Cannot create output file")
+
+                val trimmer = VideoTrimmerHelper()
+                trimmer.trimVideo(inputPath, outputFile.absolutePath, startUs, endUs, object : VideoTrimmerHelper.TrimCallback {
+                    override fun onProgress(progress: Float) {
+                        Log.d(TAG, "Trimming progress: ${progress * 100}%")
+                    }
+
+                    override fun onSuccess(outputFile: File) {
+                        runOnUiThread {
+                            addVideoToGallery(outputFile)
+                            progressDialog.dismiss()
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Video trimmed successfully!",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+
+                    override fun onError(errorMessage: String) {
+                        runOnUiThread {
+                            progressDialog.dismiss()
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Error: $errorMessage",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            Log.e(TAG, errorMessage)
+                        }
+                    }
+                })
             } catch (e: Exception) {
                 runOnUiThread {
                     progressDialog.dismiss()
-                    Toast.makeText(this@MainActivity, "Trim failed: ${e.message}", Toast.LENGTH_LONG).show()
-                    Log.e(TAG, "Trim failed", e)
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Error: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    Log.e(TAG, "Error trimming video", e)
                 }
             }
         }
@@ -193,65 +195,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun getRealPathFromURI(uri: Uri): String? {
         return try {
-            // Attempt to copy the video to a temporary file
-            val tempPath = copyUriToFile(uri)
-            if (tempPath != null) {
-                Log.i(TAG, "Successfully copied video to: $tempPath")
-                return tempPath
-            }
+            // Always use copy method for consistency
+            tempInputFile?.delete() // Clean up previous temp file
+            val tempFile = File(cacheDir, "temp_video_${System.currentTimeMillis()}.mp4")
+            tempInputFile = tempFile
 
-            // Fallback: Try MediaStore query (less reliable on Android 10+)
-            val filePathColumn = arrayOf(MediaStore.Video.Media.DATA)
-            contentResolver.query(uri, filePathColumn, null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
-                    val path = cursor.getString(columnIndex)
-                    if (File(path).exists()) {
-                        Log.i(TAG, "Resolved path from MediaStore: $path")
-                        return path
-                    } else {
-                        Log.w(TAG, "MediaStore path does not exist: $path")
-                    }
-                } else {
-                    Log.w(TAG, "MediaStore query returned empty cursor for URI: $uri")
-                }
-            }
-
-            Log.e(TAG, "Failed to resolve path for URI: $uri")
-            null
-        } catch (e: Exception) {
-            Log.e(TAG, "Error resolving path for URI: $uri", e)
-            null
-        }
-    }
-
-    private fun copyUriToFile(uri: Uri): String? {
-        return try {
-            // Open input stream from the Uri
             contentResolver.openInputStream(uri)?.use { inputStream ->
-                // Create a temporary file in cache directory
-                val tempFile = File(cacheDir, "temp_video_${System.currentTimeMillis()}.mp4")
-
-                // Copy the stream to the temporary file
                 tempFile.outputStream().use { outputStream ->
-                    val buffer = ByteArray(4 * 1024) // 4KB buffer
-                    var bytesRead: Int
-                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                        outputStream.write(buffer, 0, bytesRead)
-                    }
-                    outputStream.flush()
+                    inputStream.copyTo(outputStream)
                 }
+            }
 
-                // Verify the file was created and is not empty
-                if (tempFile.exists() && tempFile.length() > 0) {
-                    return tempFile.absolutePath
-                } else {
-                    Log.e(TAG, "Temporary file is empty or not created: ${tempFile.absolutePath}")
-                    tempFile.delete() // Clean up
-                    return null
-                }
-            } ?: run {
-                Log.e(TAG, "Failed to open input stream for URI: $uri")
+            if (tempFile.exists() && tempFile.length() > 0) {
+                tempFile.absolutePath
+            } else {
+                Log.e(TAG, "Temporary file is empty or not created")
                 null
             }
         } catch (e: Exception) {
@@ -260,60 +218,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
-
- /*   private fun getRealPathFromURI(uri: Uri): String? {
-        return try {
-            val filePathColumn = arrayOf(MediaStore.Video.Media.DATA)
-            val cursor = contentResolver.query(uri, filePathColumn, null, null, null)
-
-            if (cursor != null && cursor.moveToFirst()) {
-                val columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
-                val path = cursor.getString(columnIndex)
-                cursor.close()
-                path
-            } else {
-                // Fallback: try to copy the file to cache directory
-                copyUriToFile(uri)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to get real path from URI", e)
-            copyUriToFile(uri)
-        }
-    }
-
-    private fun copyUriToFile(uri: Uri): String? {
-        return try {
-            val inputStream = contentResolver.openInputStream(uri)
-            val tempFile = File(cacheDir, "temp_video_${System.currentTimeMillis()}.mp4")
-
-            inputStream?.use { input ->
-                tempFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-
-            tempFile.absolutePath
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to copy URI to file", e)
-            null
-        }
-    }
-           */
     private fun createOutputFile(): File? {
         return try {
             val videoDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10+ - use app-specific external storage
-                File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "TrimmedVideos")
+                File(
+                    getExternalFilesDir(Environment.DIRECTORY_MOVIES),
+                    "TrimmedVideos"
+                )
             } else {
-                // Android 9 and below - use public Movies directory
-                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), "VideoEditor")
+                File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                    "VideoEditor"
+                ).apply { mkdirs() }
             }
 
-            if (!videoDir.exists()) {
-                videoDir.mkdirs()
-            }
-
+            videoDir.mkdirs()
             File(videoDir, "trimmed_${System.currentTimeMillis()}.mp4")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create output file", e)
@@ -321,28 +240,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun addVideoToGallery(videoFile: File): Uri? {
-        return try {
+    private fun addVideoToGallery(videoFile: File) {
+        try {
             val values = ContentValues().apply {
                 put(MediaStore.Video.Media.DISPLAY_NAME, videoFile.name)
                 put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
                 put(MediaStore.Video.Media.DATA, videoFile.absolutePath)
-
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/VideoEditor")
-                    put(MediaStore.Video.Media.IS_PENDING, 0)
                 }
             }
 
-            val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-
-            // Notify MediaScanner to refresh gallery
+            contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
             sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(videoFile)))
-
-            uri
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add video to gallery", e)
-            null
         }
     }
 }
