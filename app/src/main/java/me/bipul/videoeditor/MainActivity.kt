@@ -243,6 +243,8 @@ class MainActivity : AppCompatActivity() {
                         override fun onSuccess(outputFile: File) {
                             runOnUiThread {
                                 addVideoToGallery(outputFile)
+
+                                Log.w(TAG, "Trimming result: $outputFile")
                                 progressDialog.dismiss()
                                 Toast.makeText(
                                     this@MainActivity,
