@@ -28,6 +28,7 @@ import java.io.File
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
 import com.google.android.exoplayer2.ui.PlayerView
+import java.io.FileOutputStream
 
 class MainActivity : AppCompatActivity() {
     private lateinit var mBinding: ActivityMainBinding
@@ -103,10 +104,10 @@ class MainActivity : AppCompatActivity() {
                         }
                         handler.post {
                             try {
-                             //   mBinding.videoView.seekTo(progress)
+                                exoPlayer?.seekTo(progress.toLong())
                                 Log.d(TAG, "Seek to $progress successful")
                             } catch (e: Exception) {
-                                Log.e(TAG, "Error seeking VideoView to $progress", e)
+                                Log.e(TAG, "Error seeking ExoPlayer to $progress", e)
                             }
                         }
                     } else {
@@ -119,7 +120,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar) {
-          //      mBinding.videoView.pause()
+                exoPlayer?.pause()
                 Log.d(TAG, "Started tracking ${if (isStart) "Start" else "End"} SeekBar")
             }
 
@@ -127,7 +128,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d(TAG, "Stopped tracking ${if (isStart) "Start" else "End"} SeekBar")
                 if (isStart) {
                     handler.post {
-                  //      mBinding.videoView.start()
+                        exoPlayer?.play()
                     }
                 }
             }
@@ -137,6 +138,9 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         tempInputFile?.delete()
+        exoPlayer?.release()
+        // Clean up any remaining temp output files
+        cacheDir.listFiles()?.filter { it.name.startsWith("temp_output_") }?.forEach { it.delete() }
     }
 
     private fun pickVideo() {
@@ -147,8 +151,8 @@ class MainActivity : AppCompatActivity() {
         videoPickerLauncher.launch(intent)
     }
 
-
     private fun setupVideoPreview(uri: Uri) {
+        exoPlayer?.release() // Release previous player if exists
         exoPlayer = ExoPlayer.Builder(this).build()
         mBinding.playerView.player = exoPlayer // Use PlayerView in layout instead of VideoView
         val mediaItem = MediaItem.fromUri(uri)
@@ -189,6 +193,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkAndRequestPermissions(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            true // No need for runtime permissions for MediaStore access in Android 13+
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // For Android 10-12, READ_MEDIA_VIDEO is sufficient for picking videos
             true
         } else {
             val writePermission =
@@ -227,12 +234,14 @@ class MainActivity : AppCompatActivity() {
                     throw IllegalArgumentException("Invalid trim duration")
                 }
 
-                val outputFile = createOutputFile() ?: throw Exception("Cannot create output file")
+                val outputUri = createOutputFile() ?: throw Exception("Cannot create output file")
+                val outputPath = getRealPathFromUriOrFile(outputUri)
+                    ?: throw Exception("Cannot get output path")
 
                 val trimmer = VideoTrimmerHelper()
                 trimmer.trimVideo(
                     inputPath,
-                    outputFile.absolutePath,
+                    outputPath,
                     startUs,
                     endUs,
                     object : VideoTrimmerHelper.TrimCallback {
@@ -241,16 +250,38 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         override fun onSuccess(outputFile: File) {
-                            runOnUiThread {
-                                addVideoToGallery(outputFile)
-
-                                Log.w(TAG, "Trimming result: $outputFile")
-                                progressDialog.dismiss()
-                                Toast.makeText(
-                                    this@MainActivity,
-                                    "Video trimmed successfully!",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                            // For Android 10+, copy the temp file to MediaStore
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                if (copyFileToMediaStore(outputPath, outputUri)) {
+                                    runOnUiThread {
+                                        addVideoToGallery(outputUri)
+                                        progressDialog.dismiss()
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Video trimmed successfully!",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                } else {
+                                    runOnUiThread {
+                                        progressDialog.dismiss()
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Error: Failed to save video",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            } else {
+                                runOnUiThread {
+                                    addVideoToGallery(outputUri)
+                                    progressDialog.dismiss()
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "Video trimmed successfully!",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
                         }
 
@@ -301,39 +332,100 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun createOutputFile(): File? {
+    private fun createOutputFile(): Uri? {
         return try {
-            val videoDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "TrimmedVideos")
-            } else {
-                File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-                    "VideoEditor"
-                ).apply { mkdirs() }
+            val fileName = "trimmed_${System.currentTimeMillis()}.mp4"
+            val values = ContentValues().apply {
+                put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
+                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
+                put(MediaStore.Video.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(
+                        MediaStore.Video.Media.RELATIVE_PATH,
+                        "${Environment.DIRECTORY_MOVIES}/VideoEditor"
+                    )
+                    put(
+                        MediaStore.Video.Media.IS_PENDING,
+                        1
+                    ) // Mark as pending until writing is complete
+                } else {
+                    val moviesDir =
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+                    val videoDir = File(moviesDir, "VideoEditor")
+                    videoDir.mkdirs()
+                    put(MediaStore.Video.Media.DATA, File(videoDir, fileName).absolutePath)
+                }
             }
-            videoDir.mkdirs()
-            File(videoDir, "trimmed_${System.currentTimeMillis()}.mp4")
+
+            val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+            uri ?: throw Exception("Failed to create MediaStore entry")
+            uri
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create output file", e)
             null
         }
     }
 
-    private fun addVideoToGallery(videoFile: File) {
-        try {
-            val values = ContentValues().apply {
-                put(MediaStore.Video.Media.DISPLAY_NAME, videoFile.name)
-                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                put(MediaStore.Video.Media.DATA, videoFile.absolutePath)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(
-                        MediaStore.Video.Media.RELATIVE_PATH,
-                        Environment.DIRECTORY_MOVIES + "/VideoEditor"
-                    )
+    private fun getRealPathFromUriOrFile(uri: Uri): String? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // For Android 10+, create a temporary file for the output
+            try {
+                val tempFile = File(cacheDir, "temp_output_${System.currentTimeMillis()}.mp4")
+                tempFile.absolutePath
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create temp output file", e)
+                null
+            }
+        } else {
+            // For Android 9 and below, use the absolute path from ContentValues
+            contentResolver.query(uri, arrayOf(MediaStore.Video.Media.DATA), null, null, null)
+                ?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA))
+                    } else {
+                        null
+                    }
+                }
+        }
+    }
+
+    private fun copyFileToMediaStore(tempFilePath: String, mediaStoreUri: Uri): Boolean {
+        return try {
+            val tempFile = File(tempFilePath)
+            if (!tempFile.exists()) {
+                Log.e(TAG, "Temp file doesn't exist: $tempFilePath")
+                return false
+            }
+
+            contentResolver.openOutputStream(mediaStoreUri)?.use { outputStream ->
+                tempFile.inputStream().use { inputStream ->
+                    inputStream.copyTo(outputStream)
                 }
             }
-            contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(videoFile)))
+
+            // Clean up temp file
+            tempFile.delete()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to copy file to MediaStore", e)
+            false
+        }
+    }
+
+    private fun addVideoToGallery(videoUri: Uri) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Update IS_PENDING to 0 to make the file visible
+                val values = ContentValues().apply {
+                    put(MediaStore.Video.Media.IS_PENDING, 0)
+                }
+                contentResolver.update(videoUri, values, null, null)
+            } else {
+                // For older versions, trigger media scanner
+                sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, videoUri))
+            }
+            Log.d(TAG, "Video added to gallery: $videoUri")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add video to gallery", e)
         }
