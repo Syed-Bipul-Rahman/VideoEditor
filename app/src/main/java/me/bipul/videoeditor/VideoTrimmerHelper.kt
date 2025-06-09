@@ -79,7 +79,6 @@ class VideoTrimmerHelper {
                             videoFormat = format
                             Log.d(TAG, "Found video track at index $i")
                         }
-
                         mime.startsWith("audio/") && audioTrackIndex == -1 -> {
                             audioTrackIndex = i
                             audioFormat = format
@@ -99,12 +98,12 @@ class VideoTrimmerHelper {
                 val videoDuration = if (videoFormat.containsKey(MediaFormat.KEY_DURATION)) {
                     videoFormat.getLong(MediaFormat.KEY_DURATION)
                 } else {
-                    // Try to get duration from file metadata
                     extractor.selectTrack(videoTrackIndex)
                     var maxTime = 0L
                     while (extractor.advance()) {
                         maxTime = extractor.sampleTime
                     }
+                    extractor.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC) // Reset extractor
                     maxTime
                 }
 
@@ -162,7 +161,6 @@ class VideoTrimmerHelper {
                         extractor, audioTrackIndex, muxer, audioOutputTrack,
                         startUs, endUs, "audio", callback
                     )
-
                     if (!audioSuccess) {
                         Log.w(TAG, "Audio processing failed, continuing with video only")
                     }
@@ -194,7 +192,6 @@ class VideoTrimmerHelper {
                     callback.onError("Unexpected error: ${e.javaClass.simpleName} - ${e.message}")
                 }
             } finally {
-                // Clean up resources
                 try {
                     muxer?.stop()
                     muxer?.release()
@@ -219,7 +216,6 @@ class VideoTrimmerHelper {
     ): Boolean {
         return try {
             Log.d(TAG, "Processing $trackType track")
-
             extractor.selectTrack(trackIndex)
             extractor.seekTo(startUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
 
@@ -230,8 +226,6 @@ class VideoTrimmerHelper {
 
             while (true) {
                 val sampleSize = extractor.readSampleData(buffer, 0)
-
-
                 if (sampleSize < 0) {
                     bufferInfo.set(0, 0, -1, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                     muxer.writeSampleData(outputTrackIndex, buffer, bufferInfo)
@@ -242,44 +236,28 @@ class VideoTrimmerHelper {
                 val sampleTime = extractor.sampleTime
                 if (sampleTime < 0) break
                 if (sampleTime > endUs) {
-                    Log.d(
-                        TAG,
-                        "$trackType track reached end time: ${sampleTime / 1000}ms > ${endUs / 1000}ms"
-                    )
+                    Log.d(TAG, "$trackType track reached end time: ${sampleTime / 1000}ms > ${endUs / 1000}ms")
                     break
                 }
-
 
                 if (sampleTime >= startUs) {
                     val extractorFlags = extractor.sampleFlags
                     var codecFlags = 0
-
-                    // Convert MediaExtractor flags to MediaCodec flags
                     if (extractorFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
                         codecFlags = codecFlags or MediaCodec.BUFFER_FLAG_SYNC_FRAME
                     }
-
-                    // Handle partial frame flag for API 29+
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         if (extractorFlags and MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME != 0) {
                             codecFlags = codecFlags or MediaCodec.BUFFER_FLAG_PARTIAL_FRAME
                         }
                     }
 
-                    bufferInfo.set(
-                        0,
-                        sampleSize,
-                        sampleTime - startUs,
-                        codecFlags  // Use converted flags
-                    )
-
+                    bufferInfo.set(0, sampleSize, sampleTime - startUs, codecFlags)
                     muxer.writeSampleData(outputTrackIndex, buffer, bufferInfo)
                     sampleCount++
 
-                    // Report progress periodically (every 100ms for video)
                     if (trackType == "video" && sampleTime - lastProgressTime > 100_000) {
-                        val progress =
-                            ((sampleTime - startUs).toFloat() / (endUs - startUs)).coerceIn(0f, 1f)
+                        val progress = ((sampleTime - startUs).toFloat() / (endUs - startUs)).coerceIn(0f, 1f)
                         callback.onProgress(progress)
                         lastProgressTime = sampleTime
                     }
@@ -293,7 +271,6 @@ class VideoTrimmerHelper {
 
             Log.d(TAG, "Processed $sampleCount samples for $trackType track")
             true
-
         } catch (e: Exception) {
             Log.e(TAG, "Error processing $trackType track", e)
             false
