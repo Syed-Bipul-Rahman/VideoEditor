@@ -110,7 +110,7 @@ class MainActivity : AppCompatActivity() {
         videoPickerLauncher.launch(intent)
     }
 
-    private fun setupVideoPreview(uri: Uri) {
+  /*  private fun setupVideoPreview(uri: Uri) {
         exoPlayer?.release()
         exoPlayer = ExoPlayer.Builder(this).build()
         mBinding.playerView.player = exoPlayer
@@ -144,7 +144,54 @@ class MainActivity : AppCompatActivity() {
         mBinding.playerView.setOnTouchListener { _, _ -> true }
         exoPlayer?.prepare()
         exoPlayer?.play()
+    }*/
+
+    private fun setupVideoPreview(uri: Uri) {
+        exoPlayer?.release()
+        exoPlayer = ExoPlayer.Builder(this).build()
+        mBinding.playerView.player = exoPlayer
+        val mediaItem = MediaItem.fromUri(uri)
+        exoPlayer?.setMediaItem(mediaItem)
+        exoPlayer?.addListener(object : com.google.android.exoplayer2.Player.Listener {
+            override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
+                if (playbackState == com.google.android.exoplayer2.Player.STATE_READY) {
+                    videoDuration = exoPlayer?.duration?.toLong() ?: 0L
+                    Log.d(TAG, "ExoPlayer duration: $videoDuration ms")
+                    if (videoDuration <= 0) {
+                        Toast.makeText(this@MainActivity, "Invalid video duration", Toast.LENGTH_SHORT).show()
+                        return
+                    }
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val inputPath = getRealPathFromURI(uri)
+                        if (inputPath == null) {
+                            runOnUiThread {
+                                Toast.makeText(this@MainActivity, "Failed to get video path", Toast.LENGTH_LONG).show()
+                            }
+                            Log.e(TAG, "Failed to get video path for URI: $uri")
+                            return@launch
+                        }
+                        val frameExtractor = VideoFrameExtractor()
+                        val frames = frameExtractor.extractFrames(inputPath, frameCount = 10)
+                        runOnUiThread {
+                            Log.d(TAG, "Extracted ${frames.size} frames, null frames: ${frames.count { it == null }}")
+                            if (frames.isEmpty()) {
+                                Toast.makeText(this@MainActivity, "No frames extracted", Toast.LENGTH_LONG).show()
+                            }
+                            mBinding.timelineView.setFrames(frames)
+                            mBinding.timelineView.setSelection(0f, 1f)
+                            startTrimMs = 0L
+                            endTrimMs = videoDuration
+                        }
+                    }
+                    exoPlayer?.play()
+                }
+            }
+        })
+        mBinding.playerView.setOnTouchListener { _, _ -> true }
+        exoPlayer?.prepare()
+        exoPlayer?.play()
     }
+
 
     private fun checkAndRequestPermissions(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

@@ -1,6 +1,7 @@
 package me.bipul.videoeditor
 
 import android.graphics.Bitmap
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -25,8 +26,10 @@ class FrameAdapter(
         val frame = frames[position]
         if (frame != null) {
             holder.imageView.setImageBitmap(frame)
+            Log.d("FrameAdapter", "Bound frame at position $position")
         } else {
-            holder.imageView.setImageResource(R.drawable.ic_video_placeholder) // Add a placeholder drawable
+            holder.imageView.setImageResource(R.drawable.ic_video_placeholder)
+            Log.d("FrameAdapter", "Bound placeholder at position $position")
         }
 
         holder.itemView.setOnClickListener {

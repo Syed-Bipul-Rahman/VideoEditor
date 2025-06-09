@@ -2,6 +2,7 @@ package me.bipul.videoeditor
 
 import android.content.Context
 import android.util.AttributeSet
+import android.util.Log
 import android.widget.FrameLayout
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -17,8 +18,8 @@ class VideoTimelineView @JvmOverloads constructor(
     val adapter: RecyclerView.Adapter<*>?
         get() = recyclerView.adapter
 
-    private val recyclerView: RecyclerView
-    private val selectionOverlay: TimelineSelectionOverlay
+    private var recyclerView: RecyclerView
+    private var selectionOverlay: TimelineSelectionOverlay
 
     var onFrameClick: ((frameIndex: Int) -> Unit)? = null
     var onSelectionChanged: ((startRatio: Float, endRatio: Float) -> Unit)? = null
@@ -43,14 +44,31 @@ class VideoTimelineView @JvmOverloads constructor(
     fun setSelection(startRatio: Float, endRatio: Float) {
         selectionOverlay.setSelection(startRatio, endRatio)
     }
-
     fun setFrames(frames: List<android.graphics.Bitmap?>) {
         val adapter = FrameAdapter(frames) { frameIndex ->
             onFrameClick?.invoke(frameIndex)
         }
         recyclerView.adapter = adapter
-        frameCount = frames.size
+        Log.d("VideoTimelineView", "Set adapter with ${frames.size} frames")
+        recyclerView.invalidate()
     }
 
     fun getFrameCount(): Int = frameCount
+
+
+    init {
+        recyclerView = RecyclerView(context).apply {
+            layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+            setBackgroundColor(android.graphics.Color.LTGRAY) // Debug background
+        }
+        selectionOverlay = TimelineSelectionOverlay(context).apply {
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+            onSelectionChanged = { startRatio, endRatio ->
+                this@VideoTimelineView.onSelectionChanged?.invoke(startRatio, endRatio)
+            }
+        }
+        addView(recyclerView)
+        addView(selectionOverlay)
+    }
 }
