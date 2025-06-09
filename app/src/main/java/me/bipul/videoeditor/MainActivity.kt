@@ -8,35 +8,30 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.os.Handler
-import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
-import android.view.MotionEvent
-import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.google.android.exoplayer2.ExoPlayer
+import com.google.android.exoplayer2.MediaItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import me.bipul.videoeditor.databinding.ActivityMainBinding
 import java.io.File
-import com.google.android.exoplayer2.ExoPlayer
-import com.google.android.exoplayer2.MediaItem
-import com.google.android.exoplayer2.ui.PlayerView
-import java.io.FileOutputStream
 
 class MainActivity : AppCompatActivity() {
     private lateinit var mBinding: ActivityMainBinding
     private var selectedVideoUri: Uri? = null
     private var videoDuration = 0L
     private var tempInputFile: File? = null
-
     private var exoPlayer: ExoPlayer? = null
+    private var startTrimMs: Long = 0L
+    private var endTrimMs: Long = 0L
 
     companion object {
         const val TAG = "VideoEditor"
@@ -84,54 +79,19 @@ class MainActivity : AppCompatActivity() {
             } ?: Toast.makeText(this, "Please import a video first", Toast.LENGTH_SHORT).show()
         }
 
-        mBinding.seekBarStart.setOnSeekBarChangeListener(createSeekBarListener(isStart = true))
-        mBinding.seekBarEnd.setOnSeekBarChangeListener(createSeekBarListener(isStart = false))
-    }
+        // Setup VideoTimelineView callbacks
+        mBinding.timelineView.onFrameClick = { frameIndex ->
+            val frameCount = (mBinding.timelineView.adapter as? FrameAdapter)?.itemCount ?: 10
+            val timestampMs = if (frameCount > 0) (frameIndex * videoDuration) / frameCount else 0L
+            exoPlayer?.seekTo(timestampMs)
+            Log.d(TAG, "Frame clicked at index $frameIndex, seeking to $timestampMs ms")
+        }
 
-    private fun createSeekBarListener(isStart: Boolean): SeekBar.OnSeekBarChangeListener {
-        val handler = Handler(Looper.getMainLooper())
-        return object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (fromUser) {
-                    Log.d(
-                        TAG,
-                        "SeekBar ${if (isStart) "Start" else "End"} progress: $progress, max: ${seekBar.max}"
-                    )
-                    if (isStart) {
-                        if (progress > mBinding.seekBarEnd.progress) {
-                            mBinding.seekBarEnd.progress = progress
-                            Log.d(TAG, "Adjusted seekBarEnd to: $progress")
-                        }
-                        handler.post {
-                            try {
-                                exoPlayer?.seekTo(progress.toLong())
-                                Log.d(TAG, "Seek to $progress successful")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error seeking ExoPlayer to $progress", e)
-                            }
-                        }
-                    } else {
-                        if (progress < mBinding.seekBarStart.progress) {
-                            mBinding.seekBarStart.progress = progress
-                            Log.d(TAG, "Adjusted seekBarStart to: $progress")
-                        }
-                    }
-                }
-            }
-
-            override fun onStartTrackingTouch(seekBar: SeekBar) {
-                exoPlayer?.pause()
-                Log.d(TAG, "Started tracking ${if (isStart) "Start" else "End"} SeekBar")
-            }
-
-            override fun onStopTrackingTouch(seekBar: SeekBar) {
-                Log.d(TAG, "Stopped tracking ${if (isStart) "Start" else "End"} SeekBar")
-                if (isStart) {
-                    handler.post {
-                        exoPlayer?.play()
-                    }
-                }
-            }
+        mBinding.timelineView.onSelectionChanged = { startRatio, endRatio ->
+            startTrimMs = (startRatio * videoDuration).toLong()
+            endTrimMs = (endRatio * videoDuration).toLong()
+            exoPlayer?.seekTo(startTrimMs)
+            Log.d(TAG, "Trim selection changed: $startTrimMs to $endTrimMs ms")
         }
     }
 
@@ -139,7 +99,6 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         tempInputFile?.delete()
         exoPlayer?.release()
-        // Clean up any remaining temp output files
         cacheDir.listFiles()?.filter { it.name.startsWith("temp_output_") }?.forEach { it.delete() }
     }
 
@@ -152,9 +111,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupVideoPreview(uri: Uri) {
-        exoPlayer?.release() // Release previous player if exists
+        exoPlayer?.release()
         exoPlayer = ExoPlayer.Builder(this).build()
-        mBinding.playerView.player = exoPlayer // Use PlayerView in layout instead of VideoView
+        mBinding.playerView.player = exoPlayer
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer?.setMediaItem(mediaItem)
         exoPlayer?.addListener(object : com.google.android.exoplayer2.Player.Listener {
@@ -163,26 +122,22 @@ class MainActivity : AppCompatActivity() {
                     videoDuration = exoPlayer?.duration?.toLong() ?: 0L
                     Log.d(TAG, "ExoPlayer duration: $videoDuration ms")
                     if (videoDuration <= 0) {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Invalid video duration",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        Toast.makeText(this@MainActivity, "Invalid video duration", Toast.LENGTH_SHORT).show()
                         return
                     }
-                    mBinding.seekBarStart.max = videoDuration.toInt()
-                    mBinding.seekBarEnd.max = videoDuration.toInt()
-                    mBinding.seekBarEnd.progress = videoDuration.toInt()
-                    mBinding.seekBarStart.progress = 0
-                    mBinding.seekBarStart.isEnabled = true
-                    mBinding.seekBarEnd.isEnabled = true
-                    mBinding.seekBarStart.isFocusable = true
-                    mBinding.seekBarEnd.isFocusable = true
-                    mBinding.seekBarStart.isFocusableInTouchMode = true
-                    mBinding.seekBarEnd.isFocusableInTouchMode = true
-                    mBinding.seekBarStart.isClickable = true
-                    mBinding.seekBarEnd.isClickable = true
-                    mBinding.seekBarStart.requestFocus()
+                    // Extract frames and populate VideoTimelineView
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val inputPath = getRealPathFromURI(uri) ?: return@launch
+                        val frameExtractor = VideoFrameExtractor()
+                        val frames = frameExtractor.extractFrames(inputPath, frameCount = 10)
+                        runOnUiThread {
+                            mBinding.timelineView.setFrames(frames)
+                            mBinding.timelineView.setSelection(0f, 1f) // Initialize selection to full duration
+                            startTrimMs = 0L
+                            endTrimMs = videoDuration
+                        }
+                    }
+                    exoPlayer?.play()
                 }
             }
         })
@@ -195,13 +150,10 @@ class MainActivity : AppCompatActivity() {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             true // No need for runtime permissions for MediaStore access in Android 13+
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // For Android 10-12, READ_MEDIA_VIDEO is sufficient for picking videos
-            true
+            true // For Android 10-12, READ_MEDIA_VIDEO is sufficient for picking videos
         } else {
-            val writePermission =
-                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            val readPermission =
-                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+            val writePermission = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            val readPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
             if (writePermission != PackageManager.PERMISSION_GRANTED || readPermission != PackageManager.PERMISSION_GRANTED) {
                 permissionLauncher.launch(
                     arrayOf(
@@ -226,11 +178,8 @@ class MainActivity : AppCompatActivity() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val inputPath =
-                    getRealPathFromURI(videoUri) ?: throw Exception("Cannot process video")
-                val startUs = mBinding.seekBarStart.progress.toLong() * 1000 // Convert ms to µs
-                val endUs = mBinding.seekBarEnd.progress.toLong() * 1000 // Convert ms to µs
-                if (endUs <= startUs) {
+                val inputPath = getRealPathFromURI(videoUri) ?: throw Exception("Cannot process video")
+                if (endTrimMs <= startTrimMs) {
                     throw IllegalArgumentException("Invalid trim duration")
                 }
 
@@ -242,45 +191,32 @@ class MainActivity : AppCompatActivity() {
                 trimmer.trimVideo(
                     inputPath,
                     outputPath,
-                    startUs,
-                    endUs,
+                    startTrimMs * 1000, // Convert ms to µs
+                    endTrimMs * 1000,   // Convert ms to µs
                     object : VideoTrimmerHelper.TrimCallback {
                         override fun onProgress(progress: Float) {
                             Log.d(TAG, "Trimming progress: ${progress * 100}%")
                         }
 
                         override fun onSuccess(outputFile: File) {
-                            // For Android 10+, copy the temp file to MediaStore
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                 if (copyFileToMediaStore(outputPath, outputUri)) {
                                     runOnUiThread {
                                         addVideoToGallery(outputUri)
                                         progressDialog.dismiss()
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            "Video trimmed successfully!",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
+                                        Toast.makeText(this@MainActivity, "Video trimmed successfully!", Toast.LENGTH_SHORT).show()
                                     }
                                 } else {
                                     runOnUiThread {
                                         progressDialog.dismiss()
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            "Error: Failed to save video",
-                                            Toast.LENGTH_LONG
-                                        ).show()
+                                        Toast.makeText(this@MainActivity, "Error: Failed to save video", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             } else {
                                 runOnUiThread {
                                     addVideoToGallery(outputUri)
                                     progressDialog.dismiss()
-                                    Toast.makeText(
-                                        this@MainActivity,
-                                        "Video trimmed successfully!",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    Toast.makeText(this@MainActivity, "Video trimmed successfully!", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -288,11 +224,7 @@ class MainActivity : AppCompatActivity() {
                         override fun onError(errorMessage: String) {
                             runOnUiThread {
                                 progressDialog.dismiss()
-                                Toast.makeText(
-                                    this@MainActivity,
-                                    "Error: $errorMessage",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                Toast.makeText(this@MainActivity, "Error: $errorMessage", Toast.LENGTH_LONG).show()
                                 Log.e(TAG, errorMessage)
                             }
                         }
@@ -300,8 +232,7 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 runOnUiThread {
                     progressDialog.dismiss()
-                    Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG)
-                        .show()
+                    Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
                     Log.e(TAG, "Error trimming video", e)
                 }
             }
@@ -341,26 +272,18 @@ class MainActivity : AppCompatActivity() {
                 put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
                 put(MediaStore.Video.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(
-                        MediaStore.Video.Media.RELATIVE_PATH,
-                        "${Environment.DIRECTORY_MOVIES}/VideoEditor"
-                    )
-                    put(
-                        MediaStore.Video.Media.IS_PENDING,
-                        1
-                    ) // Mark as pending until writing is complete
+                    put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/VideoEditor")
+                    put(MediaStore.Video.Media.IS_PENDING, 1)
                 } else {
-                    val moviesDir =
-                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+                    val moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
                     val videoDir = File(moviesDir, "VideoEditor")
                     videoDir.mkdirs()
                     put(MediaStore.Video.Media.DATA, File(videoDir, fileName).absolutePath)
                 }
             }
 
-            val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            uri ?: throw Exception("Failed to create MediaStore entry")
-            uri
+            contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                ?: throw Exception("Failed to create MediaStore entry")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create output file", e)
             null
@@ -369,7 +292,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun getRealPathFromUriOrFile(uri: Uri): String? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // For Android 10+, create a temporary file for the output
             try {
                 val tempFile = File(cacheDir, "temp_output_${System.currentTimeMillis()}.mp4")
                 tempFile.absolutePath
@@ -378,7 +300,6 @@ class MainActivity : AppCompatActivity() {
                 null
             }
         } else {
-            // For Android 9 and below, use the absolute path from ContentValues
             contentResolver.query(uri, arrayOf(MediaStore.Video.Media.DATA), null, null, null)
                 ?.use { cursor ->
                     if (cursor.moveToFirst()) {
@@ -404,7 +325,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Clean up temp file
             tempFile.delete()
             true
         } catch (e: Exception) {
@@ -416,13 +336,11 @@ class MainActivity : AppCompatActivity() {
     private fun addVideoToGallery(videoUri: Uri) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Update IS_PENDING to 0 to make the file visible
                 val values = ContentValues().apply {
                     put(MediaStore.Video.Media.IS_PENDING, 0)
                 }
                 contentResolver.update(videoUri, values, null, null)
             } else {
-                // For older versions, trigger media scanner
                 sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, videoUri))
             }
             Log.d(TAG, "Video added to gallery: $videoUri")
