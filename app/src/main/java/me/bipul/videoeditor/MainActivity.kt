@@ -119,21 +119,31 @@ class MainActivity : AppCompatActivity() {
         mBinding.playerView.player = exoPlayer
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer?.setMediaItem(mediaItem)
+
         exoPlayer?.addListener(object : com.google.android.exoplayer2.Player.Listener {
             override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
                 if (playbackState == com.google.android.exoplayer2.Player.STATE_READY) {
-                    videoDuration = exoPlayer?.duration?.toLong() ?: Long.MIN_VALUE
-                    Log.d(TAG, "ExoPlayer duration in onPlayerStateChanged: $videoDuration ms")
-                    if (videoDuration == Long.MIN_VALUE || videoDuration <= 0) {
-                        Log.w(TAG, "Invalid duration, attempting to fetch via polling")
-                        CoroutineScope(Dispatchers.Main).launch {
-                            fetchValidDuration(uri)
+                    val duration = exoPlayer?.duration?.toLong() ?: Long.MIN_VALUE
+                    Log.d(TAG, "ExoPlayer duration: $duration ms")
+
+                    if (duration == Long.MIN_VALUE || duration <= 0) {
+                        Log.w(TAG, "Invalid ExoPlayer duration, trying alternative method")
+                        // Try to get duration directly from MediaMetadataRetriever first
+                        getDurationFromMetadataRetriever(uri) { retrievedDuration ->
+                            if (retrievedDuration > 0) {
+                                videoDuration = retrievedDuration
+                                extractFrames(uri)
+                            } else {
+                                // Fallback to polling
+                                CoroutineScope(Dispatchers.Main).launch {
+                                    fetchValidDuration(uri)
+                                }
+                            }
                         }
                     } else {
-                        // Valid duration, proceed with frame extraction
+                        videoDuration = duration
                         extractFrames(uri)
                     }
-                    exoPlayer?.play()
                 }
             }
 
@@ -146,35 +156,100 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+
         mBinding.playerView.setOnTouchListener { _, _ -> true }
         exoPlayer?.prepare()
-        exoPlayer?.play()
+
+        // Don't auto-play to avoid issues
+        exoPlayer?.playWhenReady = false
+    }
+
+    private fun getDurationFromMetadataRetriever(uri: Uri, callback: (Long) -> Unit) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val retriever = MediaMetadataRetriever()
+            try {
+                // First try to copy to temp file for more reliable access
+                val tempPath = getRealPathFromURI(uri)
+                if (tempPath != null) {
+                    retriever.setDataSource(tempPath)
+                } else {
+                    // Fallback to direct URI access
+                    contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        retriever.setDataSource(pfd.fileDescriptor)
+                    } ?: throw Exception("Cannot open video file")
+                }
+
+                val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                val duration = durationStr?.toLongOrNull() ?: 0L
+                Log.d(TAG, "MediaMetadataRetriever duration: $duration ms")
+
+                withContext(Dispatchers.Main) {
+                    callback(duration)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to get duration from MediaMetadataRetriever", e)
+                withContext(Dispatchers.Main) {
+                    callback(0L)
+                }
+            } finally {
+                try {
+                    retriever.release()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to release MediaMetadataRetriever", e)
+                }
+            }
+        }
     }
 
     private fun extractFrames(uri: Uri) {
+        Log.d(TAG, "Starting frame extraction for duration: $videoDuration ms")
+
         CoroutineScope(Dispatchers.IO).launch {
-            val inputPath = getRealPathFromURI(uri)
-            if (inputPath == null) {
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, "Failed to access video file", Toast.LENGTH_LONG).show()
+            try {
+                val inputPath = getRealPathFromURI(uri)
+                if (inputPath == null) {
+                    Log.e(TAG, "Failed to get real path from URI: $uri")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "Failed to access video file", Toast.LENGTH_LONG).show()
+                        // Show placeholder frames
+                        val dummyFrames = List(10) { null }
+                        mBinding.timelineView.setFrames(dummyFrames)
+                        mBinding.timelineView.setSelection(0f, 1f)
+                    }
+                    return@launch
                 }
-                Log.e(TAG, "Null video path for URI: $uri")
-                return@launch
-            }
-            val frameExtractor = VideoFrameExtractor()
-            val frames = frameExtractor.extractFrames(inputPath, frameCount = 10)
-            runOnUiThread {
-                Log.d(TAG, "Extracted ${frames.size} frames, null frames: ${frames.count { it == null }}")
-                if (frames.isEmpty() || frames.all { it == null }) {
-                    Toast.makeText(this@MainActivity, "Failed to extract video frames", Toast.LENGTH_LONG).show()
+
+                Log.d(TAG, "Extracting frames from: $inputPath")
+                val frameExtractor = VideoFrameExtractor()
+                val frames = frameExtractor.extractFrames(inputPath, frameCount = 10)
+
+                withContext(Dispatchers.Main) {
+                    Log.d(TAG, "Extracted ${frames.size} frames, null frames: ${frames.count { it == null }}")
+
+                    if (frames.isEmpty()) {
+                        Toast.makeText(this@MainActivity, "Failed to extract video frames - empty list", Toast.LENGTH_LONG).show()
+                        val dummyFrames = List(10) { null }
+                        mBinding.timelineView.setFrames(dummyFrames)
+                    } else if (frames.all { it == null }) {
+                        Toast.makeText(this@MainActivity, "Failed to extract video frames - all null", Toast.LENGTH_LONG).show()
+                        mBinding.timelineView.setFrames(frames) // Still set them to show placeholders
+                    } else {
+                        Log.d(TAG, "Successfully extracted ${frames.count { it != null }} valid frames")
+                        mBinding.timelineView.setFrames(frames)
+                    }
+
+                    mBinding.timelineView.setSelection(0f, 1f)
+                    startTrimMs = 0L
+                    endTrimMs = videoDuration
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in extractFrames", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Error extracting frames: ${e.message}", Toast.LENGTH_LONG).show()
                     val dummyFrames = List(10) { null }
                     mBinding.timelineView.setFrames(dummyFrames)
-                } else {
-                    mBinding.timelineView.setFrames(frames)
+                    mBinding.timelineView.setSelection(0f, 1f)
                 }
-                mBinding.timelineView.setSelection(0f, 1f)
-                startTrimMs = 0L
-                endTrimMs = videoDuration
             }
         }
     }
@@ -197,40 +272,14 @@ class MainActivity : AppCompatActivity() {
             attempts++
         }
 
-        // Fallback to MediaMetadataRetriever
-        Log.w(TAG, "ExoPlayer duration polling failed, using MediaMetadataRetriever")
-        withContext(Dispatchers.IO) {
-            val retriever = MediaMetadataRetriever()
-            try {
-                contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                    retriever.setDataSource(pfd.fileDescriptor)
-                } ?: throw Exception("Cannot open video file")
-                val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                val duration = durationStr?.toLongOrNull() ?: 0L
-                Log.d(TAG, "MediaMetadataRetriever duration: $duration ms")
-                if (duration > 0) {
-                    videoDuration = duration
-                    runOnUiThread {
-                        extractFrames(uri)
-                    }
-                } else {
-                    runOnUiThread {
-                        Toast.makeText(this@MainActivity, "Unable to determine video duration", Toast.LENGTH_LONG).show()
-                    }
-                    Log.e(TAG, "Invalid duration from MediaMetadataRetriever: $duration")
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, "Failed to get video duration: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-                Log.e(TAG, "MediaMetadataRetriever failed", e)
-            } finally {
-                try {
-                    retriever.release()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to release MediaMetadataRetriever", e)
-                }
-            }
+        // If polling failed, show error but still try to extract frames
+        Log.w(TAG, "ExoPlayer duration polling failed completely")
+        withContext(Dispatchers.Main) {
+            Toast.makeText(this@MainActivity, "Unable to determine video duration", Toast.LENGTH_LONG).show()
+            // Try to extract with a default duration or show placeholders
+            val dummyFrames = List(10) { null }
+            mBinding.timelineView.setFrames(dummyFrames)
+            mBinding.timelineView.setSelection(0f, 1f)
         }
     }
 

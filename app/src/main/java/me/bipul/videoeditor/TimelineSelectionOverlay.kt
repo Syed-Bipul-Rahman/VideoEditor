@@ -11,6 +11,7 @@ import android.view.View
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import androidx.core.graphics.toColorInt
 
 class TimelineSelectionOverlay @JvmOverloads constructor(
     context: Context,
@@ -19,17 +20,17 @@ class TimelineSelectionOverlay @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     private val overlayPaint = Paint().apply {
-        color = Color.parseColor("#80ADD8E6") // Light blue with transparency
+        color = "#80ADD8E6".toColorInt() // Light blue with transparency
         style = Paint.Style.FILL
     }
 
     private val handlePaint = Paint().apply {
-        color = Color.parseColor("#4169E1") // Royal blue for handles
+        color = "#4169E1".toColorInt() // Royal blue for handles
         style = Paint.Style.FILL
     }
 
     private val borderPaint = Paint().apply {
-        color = Color.parseColor("#4169E1")
+        color = "#4169E1".toColorInt()
         style = Paint.Style.STROKE
         strokeWidth = 4f
     }
