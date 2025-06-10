@@ -47,7 +47,7 @@ class MainActivity : AppCompatActivity() {
                 result.data?.data?.also { uri ->
                     selectedVideoUri = uri
                     setupVideoPreview(uri)
-                    Log.i(TAG, "Selected video URI: $uri")
+                    Log.i(MainActivity::class.java.name, "Selected video URI: $uri")
                 }
             }
         }
@@ -87,15 +87,34 @@ class MainActivity : AppCompatActivity() {
             val frameCount = mBinding.timelineView.getFrameCount()
             val timestampMs = if (frameCount > 0) (frameIndex * videoDuration) / frameCount else 0L
             exoPlayer?.seekTo(timestampMs)
-            Log.d(TAG, "Frame clicked at index $frameIndex, seeking to $timestampMs ms")
+            Log.d(
+                MainActivity::class.java.name,
+                "Frame clicked at index $frameIndex, seeking to $timestampMs ms"
+            )
         }
+
+//        mBinding.timelineView.onSelectionChanged = { startRatio, endRatio ->
+//            startTrimMs = (startRatio * videoDuration).toLong()
+//            endTrimMs = (endRatio * videoDuration).toLong()
+//            exoPlayer?.seekTo(startTrimMs)
+//            Log.d(MainActivity::class.java.name, "Trim selection changed: $startTrimMs to $endTrimMs ms")
+//        }
 
         mBinding.timelineView.onSelectionChanged = { startRatio, endRatio ->
             startTrimMs = (startRatio * videoDuration).toLong()
             endTrimMs = (endRatio * videoDuration).toLong()
+
+            // Clamp to ensure we don't exceed video duration
+            startTrimMs = maxOf(0L, minOf(startTrimMs, videoDuration))
+            endTrimMs = maxOf(startTrimMs, minOf(endTrimMs, videoDuration))
+
             exoPlayer?.seekTo(startTrimMs)
-            Log.d(TAG, "Trim selection changed: $startTrimMs to $endTrimMs ms")
+            Log.d(
+                TAG,
+                "Trim selection changed: ${startTrimMs}ms to ${endTrimMs}ms (duration: ${videoDuration}ms)"
+            )
         }
+
     }
 
     override fun onDestroy() {
@@ -124,10 +143,13 @@ class MainActivity : AppCompatActivity() {
             override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
                 if (playbackState == com.google.android.exoplayer2.Player.STATE_READY) {
                     val duration = exoPlayer?.duration?.toLong() ?: Long.MIN_VALUE
-                    Log.d(TAG, "ExoPlayer duration: $duration ms")
+                    Log.d(MainActivity::class.java.name, "ExoPlayer duration: $duration ms")
 
                     if (duration == Long.MIN_VALUE || duration <= 0) {
-                        Log.w(TAG, "Invalid ExoPlayer duration, trying alternative method")
+                        Log.w(
+                            MainActivity::class.java.name,
+                            "Invalid ExoPlayer duration, trying alternative method"
+                        )
                         // Try to get duration directly from MediaMetadataRetriever first
                         getDurationFromMetadataRetriever(uri) { retrievedDuration ->
                             if (retrievedDuration > 0) {
@@ -147,9 +169,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            override fun onTimelineChanged(timeline: com.google.android.exoplayer2.Timeline, reason: Int) {
+            override fun onTimelineChanged(
+                timeline: com.google.android.exoplayer2.Timeline,
+                reason: Int
+            ) {
                 val newDuration = exoPlayer?.duration?.toLong() ?: Long.MIN_VALUE
-                Log.d(TAG, "Timeline changed, duration: $newDuration ms")
+                Log.d(MainActivity::class.java.name, "Timeline changed, duration: $newDuration ms")
                 if (newDuration > 0 && videoDuration != newDuration) {
                     videoDuration = newDuration
                     extractFrames(uri)
@@ -179,15 +204,23 @@ class MainActivity : AppCompatActivity() {
                     } ?: throw Exception("Cannot open video file")
                 }
 
-                val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                val durationStr =
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 val duration = durationStr?.toLongOrNull() ?: 0L
-                Log.d(TAG, "MediaMetadataRetriever duration: $duration ms")
+                Log.d(
+                    MainActivity::class.java.name,
+                    "MediaMetadataRetriever duration: $duration ms"
+                )
 
                 withContext(Dispatchers.Main) {
                     callback(duration)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to get duration from MediaMetadataRetriever", e)
+                Log.e(
+                    MainActivity::class.java.name,
+                    "Failed to get duration from MediaMetadataRetriever",
+                    e
+                )
                 withContext(Dispatchers.Main) {
                     callback(0L)
                 }
@@ -195,22 +228,33 @@ class MainActivity : AppCompatActivity() {
                 try {
                     retriever.release()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to release MediaMetadataRetriever", e)
+                    Log.e(
+                        MainActivity::class.java.name,
+                        "Failed to release MediaMetadataRetriever",
+                        e
+                    )
                 }
             }
         }
     }
 
     private fun extractFrames(uri: Uri) {
-        Log.d(TAG, "Starting frame extraction for duration: $videoDuration ms")
+        Log.d(
+            MainActivity::class.java.name,
+            "Starting frame extraction for duration: $videoDuration ms"
+        )
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val inputPath = getRealPathFromURI(uri)
                 if (inputPath == null) {
-                    Log.e(TAG, "Failed to get real path from URI: $uri")
+                    Log.e(MainActivity::class.java.name, "Failed to get real path from URI: $uri")
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, "Failed to access video file", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Failed to access video file",
+                            Toast.LENGTH_LONG
+                        ).show()
                         // Show placeholder frames
                         val dummyFrames = List(10) { null }
                         mBinding.timelineView.setFrames(dummyFrames)
@@ -219,22 +263,36 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                Log.d(TAG, "Extracting frames from: $inputPath")
+                Log.d(MainActivity::class.java.name, "Extracting frames from: $inputPath")
                 val frameExtractor = VideoFrameExtractor()
                 val frames = frameExtractor.extractFrames(inputPath, frameCount = 10)
 
                 withContext(Dispatchers.Main) {
-                    Log.d(TAG, "Extracted ${frames.size} frames, null frames: ${frames.count { it == null }}")
+                    Log.d(
+                        MainActivity::class.java.name,
+                        "Extracted ${frames.size} frames, null frames: ${frames.count { it == null }}"
+                    )
 
                     if (frames.isEmpty()) {
-                        Toast.makeText(this@MainActivity, "Failed to extract video frames - empty list", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Failed to extract video frames - empty list",
+                            Toast.LENGTH_LONG
+                        ).show()
                         val dummyFrames = List(10) { null }
                         mBinding.timelineView.setFrames(dummyFrames)
                     } else if (frames.all { it == null }) {
-                        Toast.makeText(this@MainActivity, "Failed to extract video frames - all null", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Failed to extract video frames - all null",
+                            Toast.LENGTH_LONG
+                        ).show()
                         mBinding.timelineView.setFrames(frames) // Still set them to show placeholders
                     } else {
-                        Log.d(TAG, "Successfully extracted ${frames.count { it != null }} valid frames")
+                        Log.d(
+                            MainActivity::class.java.name,
+                            "Successfully extracted ${frames.count { it != null }} valid frames"
+                        )
                         mBinding.timelineView.setFrames(frames)
                     }
 
@@ -243,9 +301,13 @@ class MainActivity : AppCompatActivity() {
                     endTrimMs = videoDuration
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error in extractFrames", e)
+                Log.e(MainActivity::class.java.name, "Error in extractFrames", e)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Error extracting frames: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Error extracting frames: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
                     val dummyFrames = List(10) { null }
                     mBinding.timelineView.setFrames(dummyFrames)
                     mBinding.timelineView.setSelection(0f, 1f)
@@ -262,7 +324,10 @@ class MainActivity : AppCompatActivity() {
 
         while (attempts < maxAttempts) {
             val duration = exoPlayer?.duration?.toLong() ?: Long.MIN_VALUE
-            Log.d(TAG, "Polling duration, attempt $attempts: $duration ms")
+            Log.d(
+                MainActivity::class.java.name,
+                "Polling duration, attempt $attempts: $duration ms"
+            )
             if (duration > 0) {
                 videoDuration = duration
                 extractFrames(uri)
@@ -273,9 +338,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         // If polling failed, show error but still try to extract frames
-        Log.w(TAG, "ExoPlayer duration polling failed completely")
+        Log.w(MainActivity::class.java.name, "ExoPlayer duration polling failed completely")
         withContext(Dispatchers.Main) {
-            Toast.makeText(this@MainActivity, "Unable to determine video duration", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this@MainActivity,
+                "Unable to determine video duration",
+                Toast.LENGTH_LONG
+            ).show()
             // Try to extract with a default duration or show placeholders
             val dummyFrames = List(10) { null }
             mBinding.timelineView.setFrames(dummyFrames)
@@ -289,8 +358,10 @@ class MainActivity : AppCompatActivity() {
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             true // For Android 10-12, READ_MEDIA_VIDEO is sufficient for picking videos
         } else {
-            val writePermission = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            val readPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+            val writePermission =
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            val readPermission =
+                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
             if (writePermission != PackageManager.PERMISSION_GRANTED || readPermission != PackageManager.PERMISSION_GRANTED) {
                 permissionLauncher.launch(
                     arrayOf(
@@ -315,10 +386,29 @@ class MainActivity : AppCompatActivity() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val inputPath = getRealPathFromURI(videoUri) ?: throw Exception("Cannot process video")
-                if (endTrimMs <= startTrimMs) {
+                val inputPath =
+                    getRealPathFromURI(videoUri) ?: throw Exception("Cannot process video")
+
+                // Get the actual video duration from the file to avoid precision issues
+                val actualDuration = getActualVideoDuration(inputPath)
+                if (actualDuration <= 0) {
+                    throw Exception("Cannot determine video duration")
+                }
+
+                // Validate and clamp trim times to actual duration
+                val clampedStartMs = maxOf(0L, minOf(startTrimMs, actualDuration))
+                val clampedEndMs = maxOf(
+                    clampedStartMs + 100,
+                    minOf(endTrimMs, actualDuration)
+                ) // Ensure at least 100ms duration
+
+                if (clampedEndMs <= clampedStartMs) {
                     throw Exception("Invalid trim duration")
                 }
+
+                Log.d(TAG, "Original trim range: ${startTrimMs}ms to ${endTrimMs}ms")
+                Log.d(TAG, "Clamped trim range: ${clampedStartMs}ms to ${clampedEndMs}ms")
+                Log.d(TAG, "Actual video duration: ${actualDuration}ms")
 
                 val outputUri = createOutputUri() ?: throw Exception("Cannot create output file")
                 val outputPath = getRealPathFromUriOrFile(outputUri)
@@ -328,8 +418,8 @@ class MainActivity : AppCompatActivity() {
                 trimmer.trimVideo(
                     inputPath,
                     outputPath,
-                    startTrimMs * 1000, // Convert ms to µs
-                    endTrimMs * 1000,   // Convert ms to µs
+                    clampedStartMs * 1000, // Convert ms to µs
+                    clampedEndMs * 1000,   // Convert ms to µs
                     object : VideoTrimmerHelper.TrimCallback {
                         override fun onProgress(progress: Float) {
                             Log.d(TAG, "Trimming progress: ${progress * 100}%")
@@ -341,19 +431,31 @@ class MainActivity : AppCompatActivity() {
                                     runOnUiThread {
                                         addVideoToGallery(outputUri)
                                         progressDialog.dismiss()
-                                        Toast.makeText(this@MainActivity, "Video trimmed successfully!", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Video trimmed successfully!",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                                 } else {
                                     runOnUiThread {
                                         progressDialog.dismiss()
-                                        Toast.makeText(this@MainActivity, "Error: Failed to save video", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Error: Failed to save video",
+                                            Toast.LENGTH_LONG
+                                        ).show()
                                     }
                                 }
                             } else {
                                 runOnUiThread {
                                     addVideoToGallery(outputUri)
                                     progressDialog.dismiss()
-                                    Toast.makeText(this@MainActivity, "Video trimmed successfully!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "Video trimmed successfully!",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                             }
                         }
@@ -361,7 +463,11 @@ class MainActivity : AppCompatActivity() {
                         override fun onError(errorMessage: String) {
                             runOnUiThread {
                                 progressDialog.dismiss()
-                                Toast.makeText(this@MainActivity, "Error: $errorMessage", Toast.LENGTH_LONG).show()
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "Error: $errorMessage",
+                                    Toast.LENGTH_LONG
+                                ).show()
                                 Log.e(TAG, errorMessage)
                             }
                         }
@@ -370,7 +476,8 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 runOnUiThread {
                     progressDialog.dismiss()
-                    Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG)
+                        .show()
                     Log.e(TAG, "Error trimming video", e)
                 }
             }
@@ -382,27 +489,36 @@ class MainActivity : AppCompatActivity() {
             tempInputFile?.delete()
             val tempFile = File(cacheDir, "temp_video_${System.currentTimeMillis()}.mp4")
             tempInputFile = tempFile
-            Log.d(TAG, "Copying URI $uri to temp file: ${tempFile.absolutePath}")
+            Log.d(
+                MainActivity::class.java.name,
+                "Copying URI $uri to temp file: ${tempFile.absolutePath}"
+            )
 
             contentResolver.openInputStream(uri)?.use { inputStream ->
                 tempFile.outputStream().use { outputStream ->
                     val bytesCopied = inputStream.copyTo(outputStream)
-                    Log.d(TAG, "Copied $bytesCopied bytes to temp file")
+                    Log.d(MainActivity::class.java.name, "Copied $bytesCopied bytes to temp file")
                 }
             } ?: run {
-                Log.e(TAG, "Failed to open input stream for URI: $uri")
+                Log.e(MainActivity::class.java.name, "Failed to open input stream for URI: $uri")
                 return null
             }
 
             if (tempFile.exists() && tempFile.length() > 0) {
-                Log.d(TAG, "Temp file created: ${tempFile.absolutePath}, size: ${tempFile.length()} bytes")
+                Log.d(
+                    MainActivity::class.java.name,
+                    "Temp file created: ${tempFile.absolutePath}, size: ${tempFile.length()} bytes"
+                )
                 tempFile.absolutePath
             } else {
-                Log.e(TAG, "Temp file empty or not created: exists=${tempFile.exists()}, size=${tempFile.length()}")
+                Log.e(
+                    MainActivity::class.java.name,
+                    "Temp file empty or not created: exists=${tempFile.exists()}, size=${tempFile.length()}"
+                )
                 null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to copy URI to file: $uri", e)
+            Log.e(MainActivity::class.java.name, "Failed to copy URI to file: $uri", e)
             null
         }
     }
@@ -416,10 +532,14 @@ class MainActivity : AppCompatActivity() {
                 put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
                 put(MediaStore.Video.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/VideoEditor")
+                    put(
+                        MediaStore.Video.Media.RELATIVE_PATH,
+                        "${Environment.DIRECTORY_MOVIES}/VideoEditor"
+                    )
                     put(MediaStore.Video.Media.IS_PENDING, 1)
                 } else {
-                    val moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+                    val moviesDir =
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
                     val videoDir = File(moviesDir, "VideoEditor")
                     videoDir.mkdirs()
                     put(MediaStore.Video.Media.DATA, File(videoDir, fileName).absolutePath)
@@ -429,7 +549,7 @@ class MainActivity : AppCompatActivity() {
             contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
                 ?: throw Exception("Failed to create MediaStore entry")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create output file", e)
+            Log.e(MainActivity::class.java.name, "Failed to create output file", e)
             null
         }
     }
@@ -440,17 +560,18 @@ class MainActivity : AppCompatActivity() {
                 val tempFile = File(cacheDir, "temp_output_${System.currentTimeMillis()}.mp4")
                 tempFile.absolutePath
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to create temp output file", e)
+                Log.e(MainActivity::class.java.name, "Failed to create temp output file", e)
                 null
             }
         } else {
-            contentResolver.query(uri, arrayOf(MediaStore.Video.Media.DATA), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA))
-                } else {
-                    null
+            contentResolver.query(uri, arrayOf(MediaStore.Video.Media.DATA), null, null, null)
+                ?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA))
+                    } else {
+                        null
+                    }
                 }
-            }
         }
     }
 
@@ -458,7 +579,7 @@ class MainActivity : AppCompatActivity() {
         return try {
             val tempFile = File(tempFilePath)
             if (!tempFile.exists()) {
-                Log.e(TAG, "Temp file doesn't exist: $tempFilePath")
+                Log.e(MainActivity::class.java.name, "Temp file doesn't exist: $tempFilePath")
                 return false
             }
 
@@ -471,8 +592,27 @@ class MainActivity : AppCompatActivity() {
             tempFile.delete()
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to copy file to MediaStore", e)
+            Log.e(MainActivity::class.java.name, "Failed to copy file to MediaStore", e)
             false
+        }
+    }
+
+    private fun getActualVideoDuration(filePath: String): Long {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(filePath)
+            val durationStr =
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            durationStr?.toLongOrNull() ?: 0L
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get actual video duration", e)
+            0L
+        } finally {
+            try {
+                retriever.release()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to release MediaMetadataRetriever", e)
+            }
         }
     }
 
@@ -486,9 +626,9 @@ class MainActivity : AppCompatActivity() {
             } else {
                 sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, uri))
             }
-            Log.d(TAG, "Video added to gallery: $uri")
+            Log.d(MainActivity::class.java.name, "Video added to gallery: $uri")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to add video to gallery", e)
+            Log.e(MainActivity::class.java.name, "Failed to add video to gallery", e)
         }
     }
 }
